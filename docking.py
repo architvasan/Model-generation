@@ -31,3 +31,4 @@ if __name__ == '__main__':
 with open(f'{path}/docking.log',"w+") as logf:
     logf.write("Docking time (sec): {}\n".format(docked_time - start))
 
+

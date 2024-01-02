@@ -24,7 +24,7 @@ def RunDocking(smiles, inpath, outpath, padding=4):
     #else: # else it is a pdb
     #    receptor = dock_conf.PrepareReceptor(inpath,padding,outpath)
     
-    dock, lig, receptor = dock_conf.DockConf("input/receptor.oeb",confs,MAX_POSES=1)
+    dock, lig, receptor = dock_conf.DockConf(inpath,file_extension,confs[0],MAX_POSES=1)
     
     # Currently we generate 200 conformers for each ligand, but only take
     #   the best pose, as scored by Openeye. It may be useful to consider

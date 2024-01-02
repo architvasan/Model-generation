@@ -87,11 +87,18 @@ def PrepareReceptorFromBinary(filename):
     oedocking.OEReadReceptorFile(receptor,filename)
     return receptor
 
-def DockConf(pdb_file, mol, MAX_POSES = 5):
-    receptor = oechem.OEGraphMol()
-    oedocking.OEReadReceptorFile(receptor, pdb_file)
+def DockConf(recept_file, file_extension, mol, MAX_POSES = 5):
+    print(file_extension)
+    #ifs = oechem.oemolistream()
+    if file_extension == '.oeb':
+        receptor = oechem.OEGraphMol()
+        oedocking.OEReadReceptorFile(receptor, recept_file)
+    elif file_extension == '.oedu':
+        receptor = oechem.OEDesignUnit()
+        oechem.OEReadDesignUnit(recept_file, receptor)
     dock = oedocking.OEDock()
     dock.Initialize(receptor)
+    #for mcmol in ifs.GetOEMols():
     lig = oechem.OEMol()
     err = dock.DockMultiConformerMolecule(lig,mol,MAX_POSES)
     return dock, lig, receptor
@@ -99,15 +106,17 @@ def DockConf(pdb_file, mol, MAX_POSES = 5):
 def WriteStructures(receptor, lig, apo_path, lig_path):
     ofs = oechem.oemolostream()
     success = True
-    if ofs.open(apo_path):
-        oechem.OEWriteMolecule(ofs,receptor)
-        ofs.close()
-    else:
-        success = False
-    # TODO: If MAX_POSES != 1, we should select the top pose to save
-    conf = list(lig.GetConfs())[0]
+    if True:
+        if ofs.open(apo_path):
+            #oechem.OEWriteMolecule(ofs,receptor)
+            oechem.OEWritePDBFile(ofs, receptor)
+            ofs.close()
+        else:
+            success = False
+        # TODO: If MAX_POSES != 1, we should select the top pose to save
+    #conf = list(lig.GetConfs())[0]
     if ofs.open(lig_path):
-        oechem.OEWriteMolecule(ofs,conf)
+        oechem.OEWriteMolecule(ofs,lig)
         ofs.close()
     else:
         success = False
@@ -115,10 +124,14 @@ def WriteStructures(receptor, lig, apo_path, lig_path):
 
 ### Returns an array of length MAX_POSES from above. This is the range of scores
 def LigandScores(dock, lig):
-    return [ dock.ScoreLigand(conf) for conf in lig.GetConfs() ]
+    #sdtag = oedocking.OEDockMethodGetName(dockOpts.GetScoreMethod())
+    #oedocking.OESetSDScore(dockedMol, dock, sdtag)
+    #dock.AnnotatePose(dockedMol)
+    return dock.ScoreLigand(lig)
+    #return [ dock.ScoreLigand(conf) for conf in lig.GetConfs() ]
 
 def BestDockScore(dock, lig):
-    return LigandScores(dock,lig)[0]
+    return LigandScores(dock,lig)#[0]
 
 def ScoreRange(dock,lig):
     tmp = LigandScores(dock,lig)

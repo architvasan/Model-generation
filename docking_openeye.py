@@ -139,6 +139,35 @@ def read_receptor(receptor_oedu_file: Path):
     oechem.OEReadDesignUnit(str(receptor_oedu_file), receptor)
     return receptor
 
+def create_complex():
+
+    import MDAnalysis as mda
+    import numpy as np
+    
+    # Load protein structure
+    protein = mda.Universe('protein.pdb')
+    
+    # Load ligand trajectory (assuming multiple frames)
+    ligand_traj = mda.Universe('ligand.pdb', 'ligand.dcd')
+    
+    # Create an output PDB file for writing the combined trajectory
+    with mda.Writer('output.pdb', ligand_traj.trajectory.n_atoms) as pdb_writer:
+        for ts_ligand in ligand_traj.trajectory:
+            # Create a copy of the protein universe for each ligand frame
+            protein_copy = mda.Universe('protein.pdb')
+    
+            # Update coordinates of the ligand in the protein_copy universe
+            protein_copy.atoms.positions[...] = ligand_traj.atoms.positions
+    
+            # Concatenate protein and ligand coordinates
+            combined_coordinates = np.concatenate([protein_copy.atoms.positions, ligand_traj.atoms.positions], axis=0)
+    
+            # Write the combined coordinates to the output PDB file
+            pdb_writer.write(combined_coordinates)
+
+
+
+
 
 #@exception_handler(default_return=0.0)
 def run_docking(
