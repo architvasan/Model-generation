@@ -11,7 +11,8 @@ from typing import List, Optional
 from openeye import oechem, oedocking, oeomega
 
 #from pipt.docking_utils import smi_to_structure
-#from utils import exception_handler
+from utils import exception_handler
+import os
 
 def from_mol(mol, isomer=True, num_enantiomers=1):
     """
@@ -105,12 +106,12 @@ def best_dock_score(dock, lig):
     return ligand_scores(dock, lig)#[0]
 
 
-def write_ligand(ligand, output_path: Path) -> None:
+def write_ligand(ligand, output_dir: Path, output_path: Path) -> None:
     # TODO: If MAX_POSES != 1, we should select the top pose to save
     ofs = oechem.oemolostream()
     for it, conf in enumerate(list(ligand.GetConfs())):
     #conf = list(ligand.GetConfs())[0]
-        if ofs.open(f'lig_confs/{it}_{str(output_path)}'):
+        if ofs.open(f'{str(output_dir)}/{it}_{str(output_path)}'):
             oechem.OEWriteMolecule(ofs, conf)
             ofs.close()
     return
@@ -139,39 +140,104 @@ def read_receptor(receptor_oedu_file: Path):
     oechem.OEReadDesignUnit(str(receptor_oedu_file), receptor)
     return receptor
 
-def create_complex():
+def create_complex(protein_universe, ligand_pdb):#, temp_output):
+    u1 = protein_universe
+    u2 = mda.Universe(ligand_pdb)
+    #u3 = mda.Universe("solvent.pdb")
+    #mn_mass = 54.93804  # Replace with the actual mass of Mn
+    #mn_atom_indices = u1.select_atoms('name MN').indices
+    #u1.atoms[mn_atom_indices].masses = mn_mass
+    u = mda.core.universe.Merge(u1.select_atoms("chainID A and not resname AKG NME HOH"), u2.atoms)#, u3.atoms)
+    #u.atoms.write(temp_output)
+    return u
 
+def create_trajectory(protein_universe, ligand_dir, output_file_name):
+    import MDAnalysis as mda
+    ligand_files = sorted(os.listdir(ligand_dir))
+    #, n_atoms,
+    comb_univ_1 = create_complex(protein_universe, f'{ligand_dir}/{ligand_files[0]}').select_atoms("all")
+    with mda.Writer(output_file_name, comb_univ_1.n_atoms,) as w:
+        for it, ligand_file in enumerate(ligand_files):
+            comb_univ = create_complex(protein_universe, f'{ligand_dir}/{ligand_file}') 
+            w.write(comb_univ)    # write a whole universe
+    return
+
+    #with MDAnalysis.Writer("output_combined_trajectories/output.pdb", multiframe=True):
+                
+
+
+#   calphas = universe.select_atoms("name CA")
+#with MDAnalysis.Writer("calpha_traj.pdb", multiframe=True) as W:
+#    for ts in u.trajectory:
+#        W.write(calphas) 
+
+
+
+
+def _create_complex(protein_pdb, ligand_dir):
     import MDAnalysis as mda
     import numpy as np
+    import os
     
-    # Load protein structure
-    protein = mda.Universe('protein.pdb')
+    # Load protein structure (single frame)
+    protein = mda.Universe(protein_pdb)
     
-    # Load ligand trajectory (assuming multiple frames)
-    ligand_traj = mda.Universe('ligand.pdb', 'ligand.dcd')
+    # Specify the mass of Mn
+    mn_mass = 54.93804  # Replace with the actual mass of Mn
     
-    # Create an output PDB file for writing the combined trajectory
-    with mda.Writer('output.pdb', ligand_traj.trajectory.n_atoms) as pdb_writer:
-        for ts_ligand in ligand_traj.trajectory:
-            # Create a copy of the protein universe for each ligand frame
-            protein_copy = mda.Universe('protein.pdb')
+    # Assign mass to Mn atom
+    mn_atom_indices = protein.select_atoms('type MN').indices
+    protein.atoms[mn_atom_indices].masses = mn_mass
+
+    # Create an output directory for writing the combined trajectories
+    output_dir = 'output_combined_trajectories'
+    os.makedirs(output_dir, exist_ok=True)
     
-            # Update coordinates of the ligand in the protein_copy universe
-            protein_copy.atoms.positions[...] = ligand_traj.atoms.positions
+    # Loop through ligand PDB files
+    ligand_files = sorted(os.listdir(ligand_dir))
+    for ligand_file in ligand_files:
+        if ligand_file.endswith('.pdb'):
+            # Load ligand structure (single frame)
+            print(ligand_file)
+            ligand = mda.Universe(os.path.join(ligand_dir, ligand_file))
     
-            # Concatenate protein and ligand coordinates
-            combined_coordinates = np.concatenate([protein_copy.atoms.positions, ligand_traj.atoms.positions], axis=0)
-    
-            # Write the combined coordinates to the output PDB file
-            pdb_writer.write(combined_coordinates)
+            # Create an output PDB file for each combination of protein and ligand frame
+            output_file = os.path.join(output_dir, f'combined_{ligand_file}')
+            with mda.Writer(output_file, protein.atoms.n_atoms + ligand.atoms.n_atoms) as pdb_writer:
+                # Concatenate protein and ligand coordinates
+                combined_coordinates = np.concatenate([protein.atoms.positions, ligand.atoms.positions], axis=0)
+                #mn_atom_indices = combined_coordinates.select_atoms('name MN').indices
+                #combined_coordinates[mn_atom_indices].masses = mn_mass
+
+                # Create a temporary Universe with the combined coordinates
+                # Create a temporary AtomGroup with the combined coordinates
+                temp_atomgroup = mda.AtomGroup(temp_universe.atoms, universe=protein_universe)
+
+                # Update the coordinates of the temporary AtomGroup
+                temp_atomgroup.positions = combined_coordinates
+
+                # Write the frame to the output PDB file
+                pdb_writer.write(temp_atomgroup)
 
 
 
+                #frame = mda.Merge(protein, ligand)
+                #frame.atoms.positions = combined_coordinates
+                ## Write the frame to the output PDB file
+                #pdb_writer.write(frame.atoms)
 
+                #temp_universe = mda.Universe.empty(n_atoms=len(combined_coordinates))
+                #temp_universe.atoms.positions = combined_coordinates
+                #temp_universe.add_TopologyAttr('name', 'temp_group')
+                #temp_universe.load_new(combined_coordinates, format='array')
+                # Write the frame to the output PDB file
+                #pdb_writer.write(temp_universe.atoms) 
+                # Write the combined coordinates to the output PDB file
+                #pdb_writer.write(combined_coordinates)
 
-#@exception_handler(default_return=0.0)
+@exception_handler(default_return=0.0)
 def run_docking(
-    smiles: str, receptor_oedu_file: Path, lig_path: Path, rec_path: Path, temp_storage: Optional[Path] = None
+    smiles: str, receptor_oedu_file: Path, max_confs: int, out_lig_dir: Path, out_lig_path: Path, out_rec_path: Path, temp_storage: Optional[Path] = None
 ) -> float:
     """Run OpenEye docking on a single ligand.
 
@@ -181,6 +247,14 @@ def run_docking(
         A single SMILES string.
     receptor_oedu_file : Path
         Path to the receptor .oedu file.
+    max_confs : int
+        Number of ligand poses to generate
+    out_lig_dir : Path
+        Directory to output ligand poses
+    out_lig_path : Path
+        Pattern for output ligand poses
+    out_rec_path : Path
+        Where to write output receptor file
     temp_storage : Path
         Path to the temporary storage directory to write structures to,
         if None, use the current working Python's built in temp storage.
@@ -191,83 +265,19 @@ def run_docking(
         The docking score of the best conformer.
     """
 
-    if False:
-        with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_storage) as fd:
-            # Read input SMILES and generate conformer
-            smi_to_structure(smiles, Path(fd.name))
-            conformer = from_structure(Path(fd.name))
-
     conformers = select_enantiomer(from_string(smiles))
 
     # Read the receptor to dock to
     receptor = read_receptor(receptor_oedu_file)
 
     # Dock the ligand conformers to the receptor
-    dock, lig = dock_conf(receptor, conformers, max_poses=100)
+    dock, lig = dock_conf(receptor, conformers, max_poses=max_confs)
 
     # Get the best docking score (only one to consider)
     best_score = best_dock_score(dock, lig)
-    write_ligand(lig, lig_path)
-    write_receptor(receptor, rec_path)
+    write_ligand(lig, out_lig_dir, out_lig_path)
+    write_receptor(receptor, out_rec_path)
     return best_score
-
-
-# def run_docking_old(smiles: str, receptor_oedu_file: Path) -> float:
-#     """Run OpenEye docking on a single ligand.
-
-#     Parameters
-#     ----------
-#     smiles : ste
-#         A single SMILES string.
-#     receptor_oedu_file : Path
-#         Path to the receptor .oedu file.
-#     output_path : Path
-#         Path to the output directory to write `metrics.csv`
-#         containing the best docking score and `ligand.pdb`
-#         containing the best pose.
-
-#     Returns
-#     -------
-#     float
-#         The docking score of the best conformer.
-#     """
-#     # Create the output directory
-#     # output_path.mkdir(exist_ok=True, parents=True)
-
-#     start = time.time()
-#     # A list of enantiomers
-#     # conformers = select_enantiomer(from_string(smiles))
-#     try:
-#         conformers = select_enantiomer(from_string(smiles))
-#     except IndexError:
-#         out_pdbfile = Path("temp.pdb")
-#         smi_to_structure(smiles, out_pdbfile)
-#         conformers = from_structure(out_pdbfile)
-
-#     print(f"Reading conformers took {time.time() - start} seconds")
-
-#     start = time.time()
-#     receptor = read_receptor(receptor_oedu_file)
-#     print(f"Reading receptor took {time.time() - start} seconds")
-
-#     start = time.time()
-#     # Dock the ligand conformers to the receptor
-#     dock, lig = dock_conf(receptor, conformers, max_poses=1)
-#     print(f"Docking took {time.time() - start} seconds")
-
-#     # Currently we generate 200 conformers for each ligand, but only take
-#     #   the best pose, as scored by Openeye. It may be useful to consider
-#     #   something about the range of poses.
-
-#     start = time.time()
-#     best_score = best_dock_score(dock, lig)
-#     print(best_score)
-#     print(f"Scoring took {time.time() - start} seconds")
-
-#     # write_ligand(lig, output_path / "ligand.pdb")
-#     # write_receptor(receptor, f"{output_path}/apo.pdb")
-
-#     return best_score
 
 
 def run_parallel_docking(
@@ -326,4 +336,12 @@ if False:
 # TODO: We should use 30 conformers
 
 #if __name__ == "__main__":
-print(run_docking('OC[C@H]1O[C@@H](Oc2ccccc2O)[C@@H]([C@H]([C@@H]1O)O)O', 'input/6ie2_lig_akg.oedu', 'lig.pdb', 'apo.pdb'))
+#run_docking('OC[C@H]1O[C@@H](Oc2ccccc2O)[C@@H]([C@H]([C@@H]1O)O)O', 'input/6ie2_lig_akg.oedu', 100, './lig_confs', 'lig.pdb', 'apo.pdb')
+
+import MDAnalysis as mda
+protein_pdb = 'apo.pdb'
+ligand_dir = 'lig_confs'
+protein_universe = mda.Universe(protein_pdb)
+#create_complex(protein_pdb, ligand_dir)
+output_file_name = 'output_combined_trajectories/output.pdb'
+create_trajectory(protein_universe, ligand_dir, output_file_name)
