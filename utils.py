@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any, Optional, Type, TypeVar, Union
 
 import yaml
-from pydantic import BaseSettings as _BaseSettings
+from pydantic_settings import BaseSettings as _BaseSettings
 from pydantic import validator
 
 _T = TypeVar("_T")
