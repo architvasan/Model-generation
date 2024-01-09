@@ -249,6 +249,152 @@ def run_mpi_docking(
     df_new.to_csv(f'{out_csv_pattern}.{rank}.csv', index=False)
     return 1
 
+def _run_parallel_docking(
+    smiles_batch: List[str],
+    receptor_oedu_file: Path,
+    max_confs: int,
+    temp_dir: Path,
+    out_lig_dir: Path,
+    num_workers: int,
+    temp_storage: Optional[Path] = None,
+) -> List[float]:
+    # Run the docking computation
+    #run_docking(smiles, receptor_oedu_file, max_confs, temp_dir, out_lig_dir)
+    #scores = run_docking(smiles, receptor_oedu_file, max_confs, out_lig_dir, out_lig_path)
+
+    worker_fn = partial(
+        run_docking, receptor_oedu_file=receptor_oedu_file, max_confs=max_confs, temp_dir=temp_dir, out_lig_dir=out_lig_dir, temp_storage=temp_storage
+    )
+    docking_scores = []
+    with ProcessPoolExecutor(max_workers=num_workers) as pool:
+        for score in pool.map(worker_fn, smiles_batch):
+            docking_scores.append(score)
+    return docking_scores
+
+
+def _create_complex(protein_pdb, ligand_dir):
+    import numpy as np
+    import os
+    
+    # Load protein structure (single frame)
+    protein = mda.Universe(protein_pdb)
+    
+    # Specify the mass of Mn
+    mn_mass = 54.93804  # Replace with the actual mass of Mn
+    
+    # Assign mass to Mn atom
+    mn_atom_indices = protein.select_atoms('type MN').indices
+    protein.atoms[mn_atom_indices].masses = mn_mass
+
+    # Create an output directory for writing the combined trajectories
+    output_dir = 'output_combined_trajectories'
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Loop through ligand PDB files
+    ligand_files = sorted(os.listdir(ligand_dir))
+    for ligand_file in ligand_files:
+        if ligand_file.endswith('.pdb'):
+            # Load ligand structure (single frame)
+            #print(ligand_file)
+            ligand = mda.Universe(os.path.join(ligand_dir, ligand_file))
+    
+            # Create an output PDB file for each combination of protein and ligand frame
+            output_file = os.path.join(output_dir, f'combined_{ligand_file}')
+            with mda.Writer(output_file, protein.atoms.n_atoms + ligand.atoms.n_atoms) as pdb_writer:
+                # Concatenate protein and ligand coordinates
+                combined_coordinates = np.concatenate([protein.atoms.positions, ligand.atoms.positions], axis=0)
+                #mn_atom_indices = combined_coordinates.select_atoms('name MN').indices
+                #combined_coordinates[mn_atom_indices].masses = mn_mass
+
+                # Create a temporary Universe with the combined coordinates
+                # Create a temporary AtomGroup with the combined coordinates
+                temp_atomgroup = mda.AtomGroup(temp_universe.atoms, universe=protein_universe)
+
+                # Update the coordinates of the temporary AtomGroup
+                temp_atomgroup.positions = combined_coordinates
+
+                # Write the frame to the output PDB file
+                pdb_writer.write(temp_atomgroup)
+
+
+
+                #frame = mda.Merge(protein, ligand)
+                #frame.atoms.positions = combined_coordinates
+                ## Write the frame to the output PDB file
+                #pdb_writer.write(frame.atoms)
+
+                #temp_universe = mda.Universe.empty(n_atoms=len(combined_coordinates))
+                #temp_universe.atoms.positions = combined_coordinates
+                #temp_universe.add_TopologyAttr('name', 'temp_group')
+                #temp_universe.load_new(combined_coordinates, format='array')
+                # Write the frame to the output PDB file
+                #pdb_writer.write(temp_universe.atoms) 
+                # Write the combined coordinates to the output PDB file
+                #pdb_writer.write(combined_coordinates)
+
+
+
+
+
+if False:
+    if __name__ == "__main__":
+        from argparse import ArgumentParser
+    
+        parser = ArgumentParser()
+        parser.add_argument(
+            "-r", "--receptor", type=Path, required=True, help="Receptor .oedu file"
+        )
+        parser.add_argument(
+            "-s", "--smiles", type=Path, required=True, help="Ligand SMILES .smi file"
+        )
+        parser.add_argument(
+            "-o", "--output", type=Path, required=True, help="Output .csv file"
+        )
+        parser.add_argument(
+            "-c", "--confs", type=Path, required=True, help="Max conformations for ligand docking"
+        )
+        parser.add_argument(
+            "-t", "--temp", type=Path, required=True, help="Temp dir storage ligand pdbs"
+        )
+
+        parser.add_argument(
+            "-d", "--outdir", type=Path, required=True, help="Output prot-lig pose trajectories"
+        )
+
+        parser.add_argument(
+            "-g", "--storage", type=Path, default=None
+        )
+        parser.add_argument(
+            "-n", "--num_workers", type=int, default=1
+        )
+        args = parser.parse_args()
+
+        #smiles_batch: List[str],
+        #receptor_oedu_file: Path,
+        #max_confs: int,
+        #temp_dir: Path,
+        #out_lig_dir: Path,
+        #num_workers: int,
+        #temp_storage: Optional[Path] = None,
+   
+        smiles_list = args.smiles.read_text().split("\n")
+    
+        docking_scores = run_parallel_docking(
+            smiles_list, args.receptor, args.confs, args.temp, args.outdir, args.num_workers, args.storage
+        )
+    
+        # Format the output file
+        file_contents = "SMILES, DockingScore\n"
+        file_contents += "\n".join(
+            f"{smiles},{score}" for smiles, score in zip(smiles_list, docking_scores)
+        )
+        file_contents += "\n"
+    
+        # Write the output file
+        with open(args.output, "w") as f:
+            f.write(file_contents)
+
+
 df_smiles = pd.read_csv('input/6ie2_MNbound_top100.smi')['SMILES']
 recep_file = 'input/6ie2_lig_akg.oedu'
 max_confs = 100
@@ -256,7 +402,6 @@ score_cutoff = 0
 temp_dir = 'lig_confs'
 output_traj = 'output_combined_trajectories'
 score_pattern = '6ie2_scores'
-
 
 run_mpi_docking(df_smiles, recep_file, max_confs, score_cutoff, temp_dir, output_traj, score_pattern)
 
