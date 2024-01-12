@@ -14,9 +14,55 @@ from openeye import oechem, oedocking, oeomega
 import pandas as pd
 from mpi4py import MPI
 
-#from pipt.docking_utils import smi_to_structure
+from docking_utils import smi_to_structure
 from utils import exception_handler
 import os
+
+from pathlib import Path
+
+from rdkit import Chem
+from rdkit.Chem import AllChem
+
+
+def smi_to_structure(smiles: str, output_file: Path, forcefield: str = "mmff") -> None:
+    """Convert a SMILES file to a structure file.
+
+    Parameters
+    ----------
+    smiles : str
+        Input SMILES string.
+    output_file : Path
+        EIther an output PDB file or output SDF file.
+    forcefield : str, optional
+        Forcefield to use for 3D conformation generation
+        (either "mmff" or "etkdg"), by default "mmff".
+    """
+    # Convert SMILES to RDKit molecule object
+    mol = Chem.MolFromSmiles(smiles)
+
+    # Add hydrogens to the molecule
+    mol = Chem.AddHs(mol)
+
+    # Generate a 3D conformation for the molecule
+    if forcefield == "mmff":
+        AllChem.EmbedMolecule(mol)
+        AllChem.MMFFOptimizeMolecule(mol)
+    elif forcefield == "etkdg":
+        AllChem.EmbedMolecule(mol, AllChem.ETKDG())
+    else:
+        raise ValueError(f"Unknown forcefield: {forcefield}")
+
+    # Write the molecule to a file
+    if output_file.suffix == ".pdb":
+        writer = Chem.PDBWriter(str(output_file))
+    elif output_file.suffix == ".sdf":
+        writer = Chem.SDWriter(str(output_file))
+    else:
+        raise ValueError(f"Invalid output file extension: {output_file}")
+    writer.write(mol)
+    writer.close()
+
+
 
 def from_mol(mol, isomer=True, num_enantiomers=1):
     """
@@ -197,8 +243,14 @@ def run_docking(
     """
 
     try:
-        print(smiles)
-        conformers = select_enantiomer(from_string(smiles))
+        try:
+            #print(smiles)
+            conformers = select_enantiomer(from_string(smiles))
+        except:
+            with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_dir) as fd:
+                # Read input SMILES and generate conformer
+                smi_to_structure(smiles, Path(fd.name))
+                conformers = from_structure(Path(fd.name))
 
         # Read the receptor to dock to
         receptor = read_receptor(receptor_oedu_file)
@@ -212,6 +264,7 @@ def run_docking(
         #print(receptor_oedu_file)
         # Get the docking scores
         best_score = best_dock_score(dock, lig)
+
         # If receptor pdb file doesnt exist then create one
         #out_rec_path = f'{temp_dir}/{os.path.splitext(os.path.basename(str(receptor_oedu_file))[0])}.pdb'
         out_rec_path = f'{temp_dir}/{Path(receptor_oedu_file).stem}.pdb'
@@ -220,6 +273,7 @@ def run_docking(
         if not os.path.isfile(out_rec_path):
             write_receptor(receptor, out_rec_path)
         if best_score[0]<score_cutoff:
+            print(best_score[0])
             if not os.path.isdir(f'{temp_dir}/{smiles}'):
                 os.mkdir(f'{temp_dir}/{smiles}')
             write_ligand(lig, temp_dir, smiles)
