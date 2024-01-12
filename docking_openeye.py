@@ -156,12 +156,12 @@ def best_dock_score(dock, lig):
     return ligand_scores(dock, lig)#[0]
 
 
-def write_ligand(ligand, output_dir: Path, smiles: str) -> None:
+def write_ligand(ligand, output_dir: Path, smiles: str, lig_identify: str) -> None:
     # TODO: If MAX_POSES != 1, we should select the top pose to save
     ofs = oechem.oemolostream()
     for it, conf in enumerate(list(ligand.GetConfs())):
     #conf = list(ligand.GetConfs())[0]
-        if ofs.open(f'{str(output_dir)}/{smiles}/{it}.pdb'):
+        if ofs.open(f'{str(output_dir)}/{lig_identify}/{it}.pdb'):
             oechem.OEWriteMolecule(ofs, conf)
             ofs.close()
     return
@@ -212,9 +212,9 @@ def create_trajectory(protein_universe, ligand_dir, output_file_name):
             os.remove(f'{ligand_dir}/{ligand_file}')
     return
 
-#@exception_handler(default_return=0.0)
+@exception_handler(default_return=0.0)
 def run_docking(
-    smiles: str, receptor_oedu_file: Path, max_confs: int, score_cutoff: float, temp_dir: Path, out_lig_dir: Path, temp_storage: Optional[Path] = None
+    smiles: str, lig_identify: str, receptor_oedu_file: Path, max_confs: int, score_cutoff: float, temp_dir: Path, out_lig_dir: Path, temp_storage: Optional[Path] = None
 ) -> float:
     """Run OpenEye docking on a single ligand.
 
@@ -242,12 +242,12 @@ def run_docking(
         The docking score of the best conformer.
     """
 
-    try:
+    if True:
         try:
             #print(smiles)
             conformers = select_enantiomer(from_string(smiles))
         except:
-            with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_dir) as fd:
+            with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_storage) as fd:
                 # Read input SMILES and generate conformer
                 smi_to_structure(smiles, Path(fd.name))
                 conformers = from_structure(Path(fd.name))
@@ -274,13 +274,14 @@ def run_docking(
             write_receptor(receptor, out_rec_path)
         if best_score[0]<score_cutoff:
             print(best_score[0])
-            if not os.path.isdir(f'{temp_dir}/{smiles}'):
-                os.mkdir(f'{temp_dir}/{smiles}')
-            write_ligand(lig, temp_dir, smiles)
+            sys.stdout.flush()
+            if not os.path.isdir(f'{temp_dir}/{lig_identify}'):
+                os.mkdir(f'{temp_dir}/{lig_identify}')
+            write_ligand(lig, temp_dir, smiles, lig_identify)
             protein_universe = create_proteinuniv(f'{out_rec_path}')
-            create_trajectory(protein_universe, f'{temp_dir}/{smiles}', f'{out_lig_dir}/{Path(receptor_oedu_file).stem}.{smiles}.pdb')
-        return np.mean(best_score[0:10])
-    except:
+            create_trajectory(protein_universe, f'{temp_dir}/{lig_identify}', f'{out_lig_dir}/{Path(receptor_oedu_file).stem}.{lig_identify}.pdb')
+        return np.mean(best_score[0])
+    if False:
         return 0
 
 def run_mpi_docking(
@@ -290,27 +291,27 @@ def run_mpi_docking(
     score_cutoff: float,
     temp_dir: Path,
     out_lig_dir: Path,
-    out_csv_pattern: str
-    ) -> float:
+    out_csv_pattern: str,
+    temp_storage: Optional[Path] = None) -> float:
 
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank() 
     size = comm.Get_size()
     
     smiles_list_new = np.array_split(smiles_list, size)[rank]
-    scores = [run_docking(smi,receptor_oedu_file, max_confs, score_cutoff, temp_dir, out_lig_dir) for smi in smiles_list_new]
+    scores = [run_docking(smi, f'{rank}.{it}', receptor_oedu_file, max_confs, score_cutoff, temp_dir, out_lig_dir) for it, smi in enumerate(smiles_list_new)]
     df_new = pd.DataFrame({'SMILES':smiles_list_new,'Scores':scores})
     df_new.to_csv(f'{out_csv_pattern}.{rank}.csv', index=False)
     return 1
 
-df_smiles = pd.read_csv('input/6ie2_MNbound_top100.smi')['SMILES']
-recep_file = 'input/6ie2_lig_akg.oedu'
+df_smiles = pd.read_csv('input/1.smi')['SMILES']
+recep_file = 'input/rec_4ui5.oedu'
 max_confs = 100
-score_cutoff = 0
+score_cutoff = 10
 temp_dir = 'lig_confs'
 output_traj = 'output_combined_trajectories'
-score_pattern = '6ie2_scores'
+score_pattern = '4ui5_scores'
 
 
-run_mpi_docking(df_smiles, recep_file, max_confs, score_cutoff, temp_dir, output_traj, score_pattern)
+run_mpi_docking(df_smiles, recep_file, max_confs, score_cutoff, temp_dir, output_traj, score_pattern, 'temp')
 
