@@ -23,9 +23,6 @@ from pathlib import Path
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-'''
-Functions
-'''
 
 def smi_to_structure(smiles: str, output_file: Path, forcefield: str = "mmff") -> None:
     """Convert a SMILES file to a structure file.
@@ -144,7 +141,10 @@ def dock_conf(receptor, mol, max_poses: int = 1):
     dock = oedocking.OEDock()
     dock.Initialize(receptor)
     lig = oechem.OEMol()
+    #err = dock.DockMultiConformerMolecule(mol, max_poses)
     err = dock.DockMultiConformerMolecule(lig, mol, max_poses)
+    #print(err)
+    # the above line outputs the error
     return dock, lig
 
 # Returns an array of length max_poses from above. This is the range of scores
@@ -160,6 +160,7 @@ def write_ligand(ligand, output_dir: Path, smiles: str, lig_identify: str) -> No
     # TODO: If MAX_POSES != 1, we should select the top pose to save
     ofs = oechem.oemolostream()
     for it, conf in enumerate(list(ligand.GetConfs())):
+    #conf = list(ligand.GetConfs())[0]
         if ofs.open(f'{str(output_dir)}/{lig_identify}/{it}.pdb'):
             oechem.OEWriteMolecule(ofs, conf)
             ofs.close()
@@ -169,9 +170,13 @@ def write_ligand(ligand, output_dir: Path, smiles: str, lig_identify: str) -> No
 
 def write_receptor(receptor, output_path: Path) -> None:
     ofs = oechem.oemolostream()
+    #print(ofs)
     if ofs.open(str(output_path)):
+        #print("Okie!")
         mol = oechem.OEMol()
         contents = receptor.GetComponents(mol)#Within
+        #print("Yo!")
+        #print(mol)
         oechem.OEWriteMolecule(ofs, mol)
         ofs.close()
     return
@@ -193,17 +198,14 @@ def create_proteinuniv(protein_pdb):
 def create_complex(protein_universe, ligand_pdb):
     u1 = protein_universe
     u2 = mda.Universe(ligand_pdb)
-    u = mda.core.universe.Merge(u1.select_atoms("all"), u2.atoms)#, u3.atoms)
+    u = mda.core.universe.Merge(u1.select_atoms("chainID A and not resname AKG NME HOH"), u2.atoms)#, u3.atoms)
     return u
 
-def create_trajectory(protein_universe, ligand_dir, output_pdb_name, output_dcd_name):
+def create_trajectory(protein_universe, ligand_dir, output_file_name):
     import MDAnalysis as mda
     ligand_files = sorted(os.listdir(ligand_dir))
     comb_univ_1 = create_complex(protein_universe, f'{ligand_dir}/{ligand_files[0]}').select_atoms("all")
-
-    with mda.Writer(output_pdb_name, comb_univ_1.n_atoms) as w:
-        w.write(comb_univ_1)
-    with mda.Writer(output_dcd_name, comb_univ_1.n_atoms,) as w:
+    with mda.Writer(output_file_name, comb_univ_1.n_atoms,) as w:
         for it, ligand_file in enumerate(ligand_files):
             comb_univ = create_complex(protein_universe, f'{ligand_dir}/{ligand_file}') 
             w.write(comb_univ)    # write a whole universe
@@ -212,15 +214,7 @@ def create_trajectory(protein_universe, ligand_dir, output_pdb_name, output_dcd_
 
 @exception_handler(default_return=0.0)
 def run_docking(
-    smiles: str, 
-    lig_identify: str,
-    receptor_oedu_file: Path,
-    max_confs: int,
-    score_cutoff: float,
-    protein_pdb: Path,
-    temp_dir: Path,
-    out_lig_dir: Path,
-    temp_storage: Optional[Path] = None
+    smiles: str, lig_identify: str, receptor_oedu_file: Path, max_confs: int, score_cutoff: float, temp_dir: Path, out_lig_dir: Path, temp_storage: Optional[Path] = None
 ) -> float:
     """Run OpenEye docking on a single ligand.
 
@@ -248,93 +242,80 @@ def run_docking(
         The docking score of the best conformer.
     """
 
-    try:
-        conformers = select_enantiomer(from_string(smiles))
-    except:
-        with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_storage) as fd:
-            # Read input SMILES and generate conformer
-            smi_to_structure(smiles, Path(fd.name))
-            conformers = from_structure(Path(fd.name))
+    if True:
+        try:
+            #print(smiles)
+            conformers = select_enantiomer(from_string(smiles))
+        except:
+            with tempfile.NamedTemporaryFile(suffix=".pdb", dir=temp_storage) as fd:
+                # Read input SMILES and generate conformer
+                smi_to_structure(smiles, Path(fd.name))
+                conformers = from_structure(Path(fd.name))
 
-    # Read the receptor to dock to
-    receptor = read_receptor(receptor_oedu_file)
+        # Read the receptor to dock to
+        receptor = read_receptor(receptor_oedu_file)
 
-    # Dock the ligand conformers to the receptor
-    dock, lig = dock_conf(receptor, conformers, max_poses=max_confs)
+        # Dock the ligand conformers to the receptor
+        #print(receptor)
+        #print(conformers)
+        #print(max_confs)
+        dock, lig = dock_conf(receptor, conformers, max_poses=max_confs)
 
-    # Get the docking scores
-    best_score = best_dock_score(dock, lig)
+        #print(receptor_oedu_file)
+        # Get the docking scores
+        best_score = best_dock_score(dock, lig)
 
-    # If receptor pdb file doesnt exist then create one
-    if False:
+        # If receptor pdb file doesnt exist then create one
+        #out_rec_path = f'{temp_dir}/{os.path.splitext(os.path.basename(str(receptor_oedu_file))[0])}.pdb'
         out_rec_path = f'{temp_dir}/{Path(receptor_oedu_file).stem}.pdb'
+        #print(out_rec_path)
+
         if not os.path.isfile(out_rec_path):
             write_receptor(receptor, out_rec_path)
-
-    if best_score[0]<score_cutoff:
-        sys.stdout.flush()
-        if not os.path.isdir(f'{temp_dir}/{lig_identify}'):
-            os.mkdir(f'{temp_dir}/{lig_identify}')
-        write_ligand(lig, temp_dir, smiles, lig_identify)
-        protein_universe = create_proteinuniv(protein_pdb)
-        create_trajectory(protein_universe, f'{temp_dir}/{lig_identify}', f'{out_lig_dir}/pdbs/{Path(receptor_oedu_file).stem}.{lig_identify}.pdb',f'{out_lig_dir}/dcds/{Path(receptor_oedu_file).stem}.{lig_identify}.dcd')
-    return np.mean(best_score[0])
+        if best_score[0]<score_cutoff:
+            print(best_score[0])
+            sys.stdout.flush()
+            if not os.path.isdir(f'{temp_dir}/{lig_identify}'):
+                os.mkdir(f'{temp_dir}/{lig_identify}')
+            write_ligand(lig, temp_dir, smiles, lig_identify)
+            protein_universe = create_proteinuniv(f'{out_rec_path}')
+            create_trajectory(protein_universe, f'{temp_dir}/{lig_identify}', f'{out_lig_dir}/{Path(receptor_oedu_file).stem}.{lig_identify}.pdb')
+        return np.mean(best_score[0])
+    if False:
+        return 0
 
 def run_mpi_docking(
-    rank,
-    size,
     smiles_df,
     receptor_oedu_file: Path,
     max_confs: int,
     score_cutoff: float,
-    protein_pdb: Path,
     temp_dir: Path,
     out_lig_dir: Path,
     out_csv_pattern: str,
     temp_storage: Optional[Path] = None) -> float:
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank() 
+    size = comm.Get_size()
     
-    smiles_list = smiles_df['smiles'].tolist()
-    smiles_index = [ind for ind in range(len(smiles_list))]
+    smiles_list = smiles_df['SMILES']
+    smiles_index = smiles_df['index']
     smiles_list_new = np.array_split(smiles_list, size)[rank]
     smiles_index_new = np.array_split(smiles_index, size)[rank]
-    scores = [run_docking(smi, f'{smiles_index_new[it]}', receptor_oedu_file, max_confs, score_cutoff, protein_pdb, temp_dir, out_lig_dir) for it, smi in enumerate(smiles_list_new)]
+    scores = [run_docking(smi, f'{smiles_index_new[it]}', receptor_oedu_file, max_confs, score_cutoff, temp_dir, out_lig_dir) for it, smi in enumerate(smiles_list_new)]
     df_new = pd.DataFrame({'SMILES':smiles_list_new,'Scores':scores})
     df_new.to_csv(f'{out_csv_pattern}.{rank}.csv', index=False)
     return 1
 
-'''
-Running Code
-'''
-
-### Initialize mpi
-comm = MPI.COMM_WORLD
-rank = comm.Get_rank() 
-size = comm.Get_size()
-
-### Parameters setting
-
-df_smiles = pd.read_csv('tankyrase_sorted.csv') # smilesdatafile. smiles column is 'smiles'
-recep_file = 'input/rec_4ui5.oedu' # receptor oedu file for openeye 
-max_confs = 100 # confs to generate
-score_cutoff = 10 # below this score generate pose
-temp_dir = 'lig_confs' # store ligand poses temporarily
-output_traj = 'output_combined_trajectories' # store pdb + dcd files for complex poses
-score_pattern = 'scores/4ui5_scores' #store scores like this (will have #ranks files)
-protein_pdb = 'prot.pdb' #protein pdb file to use to store. Will save everything in this file to complex
+df_smiles = pd.read_csv('input/1.smi')#['SMILES']
+df_smiles['index']=[i for i in range(len(df_smiles['SMILES']))]
+recep_file = 'input/rec_4ui5.oedu'
+max_confs = 100
+score_cutoff = 10
+temp_dir = 'lig_confs'
+output_traj = 'output_combined_trajectories'
+score_pattern = '4ui5_scores'
 
 
-### Running docking in parallel
-run_mpi_docking(rank, size, df_smiles, recep_file, max_confs, score_cutoff, protein_pdb, temp_dir, output_traj, score_pattern, 'temp')
-
-
-'''
-combining all score files into one. For now just do this outside of the script
-'''
-if False:
-    comm.Barrier()
-    if rank==0:
-        df = pd.read_csv(f'{score_pattern}.0.csv')
-        for r in range(1, size):
-            df = pd.concat([df, pd.read_csv(f'{score_pattern}.{r}.csv')])
-        df.to_csv(f'{score_pattern}.csv')
+run_mpi_docking(df_smiles, recep_file, max_confs, score_cutoff, temp_dir, output_traj, score_pattern, 'temp')
 
